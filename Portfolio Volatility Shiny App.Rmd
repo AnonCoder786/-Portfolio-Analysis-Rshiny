@@ -1,0 +1,607 @@
+---
+title: "Week 11 - Portfolio Analysis Shiny App"
+runtime: shiny
+output:
+  flexdashboard::flex_dashboard:
+    orientation: rows
+    theme: 
+      version: 4
+      bootswatch: minty
+---
+
+```{r setup, message = FALSE}
+library(tidyverse)
+library(highcharter)
+library(tidyquant)
+library(timetk)
+library(scales)
+library(bslib)
+library(flexdashboard)
+library(shiny)
+library(rmarkdown )
+library(DT)
+bslib::bs_themer()
+```
+
+Sidebar {.sidebar}
+=====================================
+  
+```{r Sidebar}
+
+fluidRow(
+  column(6,
+  textInput("stock1", "Stock 1", "SPY")),
+  column(6,
+  numericInput("w1", "Portf. %", 25, min = 1, max = 100))
+)  
+
+fluidRow(
+  column(6,
+  textInput("stock2", "Stock 2", "EFA")),
+  column(6,
+  numericInput("w2", "Portf. %", 25, min = 1, max = 100))
+)
+
+fluidRow(
+  column(6,
+  textInput("stock3", "Stock 3", "IJS")),
+  column(6,
+  numericInput("w3", "Portf. %", 20, min = 1, max = 100))
+)
+
+fluidRow(
+  column(6,
+  textInput("stock4", "Stock 4", "EEM")),
+  column(6,
+  numericInput("w4", "Portf. %", 20, min = 1, max = 100))
+)
+
+fluidRow(
+  column(6,
+  textInput("stock5", "Stock 5", "AGG")),
+  column(6,
+  numericInput("w5", "Portf. %", 10, min = 1, max = 100))
+)
+
+
+fluidRow(
+  column(12,
+  dateInput("date", "Starting Date", "2013-01-01", format = "yyyy-mm-dd"))
+)
+
+fluidRow(
+  column(12,
+  selectInput("rebalance", "Rebalance Frequency",
+              c("Monthly" = "months",
+                "Weekly" = "weeks",
+                "Daily" = "days"))
+  )
+)
+
+fluidRow(
+  column(12,
+  numericInput("window", "Window", 24,
+               min = 3, max = 36, step = 1)
+  )
+  )
+
+
+actionButton("go", "Submit")
+```
+
+```{r Calculate returns and rolling standard deviation}
+
+#Check is any field is empty
+
+  isEmpty <- function() {
+    
+          
+             if(input$stock1 == "" || input$stock2 == "" || input$stock3 == "" || input$stock4 == "" || input$stock5  == ""
+           || input$w1 == "" || input$w2 == "" || input$w3 == "" || input$w4 == "" || input$w5 == ""
+           || length( input$date) == 0 || input$window == "")  {
+          return (FALSE)
+        }
+    
+    
+            return (TRUE)
+          
+       
+
+  }
+
+# Get stock prices from the Yahoo! This is the same as the previous app
+
+prices <- eventReactive(input$go, {
+
+ 
+  result = isEmpty()
+ 
+    req(result)
+
+  symbols <- c(input$stock1, input$stock2, input$stock3, input$stock4, input$stock5)
+  #symbols <- c("SPY","EFA","IJS","EEM","AGG")
+  
+  prices <- 
+    getSymbols(symbols, 
+              src = 'yahoo', 
+              from = input$date, 
+              #from = '2013-01-01', 
+              
+              auto.assign = TRUE, 
+              warnings = FALSE) %>% 
+  map(~Ad(get(.))) %>% 
+  reduce(merge) %>%
+  `colnames<-`(symbols)
+  
+})
+
+port_rolling_sd_tidy <- eventReactive(input$go, {
+
+
+  result = isEmpty()
+  
+    if (result == FALSE) {
+      
+      showNotification(
+        "Please enter all fields",
+        type = "warning"
+
+      )
+    
+    } else {
+      
+      showNotification(
+        "Processing please wait",
+        type = "message"
+
+      )
+     
+    }
+    req(result)
+  prices <- prices()
+  
+  w <- c(input$w1/100, input$w2/100, input$w3/100, input$w4/100, input$w5/100)
+
+  portfolio_returns_tq_rebalanced <-
+      prices %>%
+      to.period(period = input$rebalance, indexAt = "last", OHLC = FALSE) %>%
+      tk_tbl(preserve_index = TRUE, rename_index = "date") %>%
+      gather(asset, returns, -date) %>%
+      group_by(asset) %>%
+      mutate(returns = (log(returns) - log(lag(returns)))) %>%
+      tq_portfolio(assets_col = asset,
+               returns_col = returns,
+               weights = w,
+               col_rename = "returns") %>% 
+      na.omit()
+
+  window <- input$window
+  
+  port_rolling_sd_tidy <-
+    portfolio_returns_tq_rebalanced %>%
+    tq_mutate(mutate_fun = rollapply,
+              width = window,
+              FUN = sd,
+              col_rename = ("rolling_sd")) %>%
+    select(date, rolling_sd) %>%
+    na.omit()
+
+})
+
+port_rolling_skew_tidy <- eventReactive(input$go, {
+
+   result = isEmpty()
+    
+    req(result)
+  prices <- prices()
+  
+  w <- c(input$w1/100, input$w2/100, input$w3/100, input$w4/100, input$w5/100)
+
+  portfolio_returns_tq_rebalanced <-
+      prices %>%
+      to.period(period = input$rebalance, indexAt = "last", OHLC = FALSE) %>%
+      tk_tbl(preserve_index = TRUE, rename_index = "date") %>%
+      gather(asset, returns, -date) %>%
+      group_by(asset) %>%
+      mutate(returns = (log(returns) - log(lag(returns)))) %>%
+      tq_portfolio(assets_col = asset,
+               returns_col = returns,
+               weights = w,
+               col_rename = "returns") %>% 
+      na.omit()
+
+  window <- input$window
+  
+  port_rolling_skew_tidy <-
+    portfolio_returns_tq_rebalanced %>%
+    tq_mutate(mutate_fun = rollapply,
+              width = window,
+              FUN = skewness,
+              col_rename = ("rolling_skew")) %>%
+    select(date, rolling_skew) %>%
+    na.omit()
+
+})
+
+port_rolling_kurt_tidy <- eventReactive(input$go, {
+
+   result = isEmpty()
+    
+    req(result)
+  prices <- prices()
+  
+  w <- c(input$w1/100, input$w2/100, input$w3/100, input$w4/100, input$w5/100)
+  #w <- c(25/100, 25/100, 20/100, 20/100, 10/100)
+  portfolio_returns_tq_rebalanced <-
+      prices %>%
+      to.period(period = input$rebalance, indexAt = "last", OHLC = FALSE) %>%
+    #to.period(period = 'months', indexAt = "last", OHLC = FALSE) %>%
+        
+    tk_tbl(preserve_index = TRUE, rename_index = "date") %>%
+      gather(asset, returns, -date) %>%
+      group_by(asset) %>%
+      mutate(returns = (log(returns) - log(lag(returns)))) %>%
+      tq_portfolio(assets_col = asset,
+               returns_col = returns,
+               weights = w,
+               col_rename = "returns") %>% 
+      na.omit()
+
+  window <- input$window
+  #window <- 24
+  
+  port_rolling_kurt_tidy <-
+    portfolio_returns_tq_rebalanced %>%
+    tq_mutate(mutate_fun = rollapply,
+              width = window,
+              FUN = kurtosis,
+              col_rename = ("rolling_kurt")) %>%
+    select(date, rolling_kurt) %>%
+    na.omit()
+
+})
+
+portfolio_returns_tq_rebalanced <- eventReactive(input$go, {
+  
+   result = isEmpty()
+    
+    req(result)
+  prices <- prices()
+  w <- c(input$w1/100, input$w2/100, input$w3/100, input$w4/100, input$w5/100)
+  
+  portfolio_returns_tq_rebalanced <-
+      prices %>%
+      to.period(period = input$rebalance, indexAt = "last", OHLC = FALSE) %>%
+      tk_tbl(preserve_index = TRUE, rename_index = "date") %>%
+      gather(asset, returns, -date) %>%
+      group_by(asset) %>%
+      mutate(returns = (log(returns) - log(lag(returns)))) %>%
+      tq_portfolio(assets_col = asset,
+               returns_col = returns,
+               weights = w,
+               col_rename = "returns",
+               rebalance_on = input$rebalance) %>% 
+      na.omit()
+  
+})
+
+```
+
+<style>
+  .active{
+    font-size:16px;
+  }
+
+</style>
+
+
+Documentation {data-icon="fa-info"}
+=====================================
+
+
+```{r}
+fluidRow(
+  tags$span( "Use Sidebar to input data.", style = "margin: 0 15px;padding-top:10px;"),
+  actionButton("detail", "Input data detail")
+)
+
+
+observeEvent(input$detail,{
+  showModal(modalDialog(
+      DTOutput('tbl',height = "400px"),
+      title = "Input data detail",
+      size = "xl",
+      easyClose = TRUE,
+      footer = modalButton("close"),
+      fade = TRUE
+      
+    ))
+})
+
+
+
+
+
+# Sample data
+my_table <- data.frame(
+  Name = c("Stock 1", "Portf. %","Stock 2", "Portf. %","Stock 3", "Portf. %","Stock 4", "Portf. %","Stock 5", "Portf. %",
+           "Starting Date", "Rebalance Frequency", "Window"),
+  
+  detail = c("This column represents the name or ticker symbol of the first stock in the portfolio.",
+             "This column represents the percentage weight of each stock in the portfolio",
+             "This column represents the name or ticker symbol of the second stock in the portfolio.", 
+             "This column represents the percentage weight of the second stock in the portfolio.",
+             
+             "This column represents the name or ticker symbol of the third stock in the portfolio.",
+             "This column represents the percentage weight of the third stock in the portfolio",
+             
+             "This column represents the name or ticker symbol of the fourth stock in the portfolio.",
+             "This column represents the percentage weight of the fourth stock in the portfolio. ",
+             "This column represents the name or ticker symbol of the fifth stock in the portfolio.",
+             "This column represents the percentage weight of the fifth stock in the portfolio.",
+             "This column represents the starting date of the portfolio.",
+             "This column represents how often the portfolio is rebalanced.",
+             "This column represents the window size, which is the number of months/weeks/days used to calculate the portfolio returns."
+             )
+)
+
+output$tbl = renderDT(
+      my_table, options = list(dom = 't',pageLength = 13)
+    )
+```
+
+When the user clicks "Submit," the app retrieves financial data from Yahoo! based on the input selection and displays Volatility and Returns tabset visualizations.\
+
+__Volatility__\
+
+The Volatility tab includes various visualizations that analyze the performance and characteristics of a portfolio.<br><br>
+The __first__ set of visualizations shows the rolling standard deviation, skewness, and kurtosis of the portfolio returns. These charts are created using the tidyquant and highcharter packages in R. The rolling calculations are performed on a tidy dataset of monthly portfolio returns and then converted to xts format before plotting using highcharter. The charts provide insights into the volatility, skewness, and tail risks of the portfolio over time.<br><br>
+The __second__ set of visualizations includes a histogram and density plot of the portfolio returns. The histogram is generated using ggplot2 and includes colored bars to highlight returns that are more than 2 standard deviations away from the mean. The density plot is also created using ggplot2 and includes a shaded area for returns that are less than the mean. The median is also highlighted on the density plot using a vertical line and a text annotation. These visualizations provide insights into the distribution and skewness of the portfolio returns.
+
+
+__Returns__\
+
+The Returns tab generates various visualizations to analyze the returns of a portfolio over time.<br><br>
+The __first__ set of visualizations includes a histogram, a density plot, and a combination of the two. These plots provide an overview of the distribution of returns for the portfolio.<br><br>
+The __second__ set of visualizations includes a plot of the growth of the portfolio over time, a time series plot with a rolling mean, and a density plot by year. These plots help to analyze how the portfolio has performed over time and identify any trends or patterns.<br>
+
+
+
+
+
+
+Row {.tabset}
+-------------------------------------
+
+<style>
+  .active{
+    font-size:16px;
+  }
+</style>
+
+Volatility 
+=====================================
+
+Row {.tabset}
+-------------------------------------
+
+### Rolling Standard Deviation
+
+```{r Rolling Standard Deviation}
+
+renderHighchart({
+  
+
+  port_rolling_sd_xts_hc <-
+    port_rolling_sd_tidy() %>%
+    tk_xts(date_col = date) %>% 
+    round(., 4) * 100
+
+highchart(type = "stock") %>%
+  hc_title(text = "Portfolio Rolling Volatility") %>%
+  hc_yAxis(title = list(text = "Volatility"),
+         opposite = FALSE) %>%
+  hc_add_series(port_rolling_sd_xts_hc,
+                name = "Portfolio Vol",
+                color = "cornflowerblue") %>% 
+  hc_add_theme(hc_theme_flat()) %>%
+  hc_navigator(enabled = TRUE) %>%
+  hc_scrollbar(enabled = TRUE)
+
+})
+
+```
+
+### Rolling Skewness
+
+```{r Rolling Skewness}
+
+renderHighchart({
+
+  port_rolling_skew_xts_hc <-
+    port_rolling_skew_tidy() %>%
+    tk_xts(date_col = date)
+
+highchart(type = "stock") %>%
+  hc_title(text = "Rolling Skewness") %>%
+  hc_yAxis(title = list(text = "Skewness"),
+         opposite = FALSE,
+         max = 3,
+         mix = -3) %>%
+  hc_add_series(port_rolling_skew_xts_hc,
+                name = "Rolling Skew",
+                color = "cornflowerblue") %>% 
+  hc_add_theme(hc_theme_flat()) %>%
+  hc_navigator(enabled = TRUE) %>%
+  hc_scrollbar(enabled = TRUE)
+
+})
+
+```
+
+### Rolling Kurtosis
+
+```{r Rolling Kurtosis}
+
+renderHighchart({
+
+  port_rolling_kurt_xts_hc <-
+    port_rolling_kurt_tidy() %>%
+    tk_xts(date_col = date)
+
+highchart(type = "stock") %>%
+  hc_title(text = "Rolling Kurtosis") %>%
+  hc_yAxis(title = list(text = "Kurtosis"),
+         opposite = FALSE,
+         max = 6,
+         mix = -6) %>%
+  hc_add_series(port_rolling_kurt_xts_hc,
+                name = "Rolling Kurt",
+                color = "cornflowerblue") %>% 
+  hc_add_theme(hc_theme_flat()) %>%
+  hc_navigator(enabled = TRUE) %>%
+  hc_scrollbar(enabled = TRUE)
+
+})
+
+```
+
+Row {.tabset}
+-------------------------------------
+
+### Histogram
+
+```{r Histogram}
+renderPlot({
+
+  portfolio_returns_tq_rebalanced() %>%
+  mutate(hist_col_red = ifelse(returns < (mean(returns) - 2*sd(returns)), returns, NA),
+         hist_col_green = ifelse(returns > (mean(returns) + 2*sd(returns)), returns, NA),
+         hist_col_blue = ifelse(returns > (mean(returns) - 2*sd(returns)) &  returns < (mean(returns) + 2*sd(returns)),returns, NA)) %>% 
+  ggplot() + 
+    geom_histogram(aes(x = hist_col_red), alpha = .7, binwidth = .003, fill = "red", olor = "red") +
+    geom_histogram(aes(x = hist_col_green), alpha = .7, binwidth = .003, fill = "green", color = "green") +
+    geom_histogram(aes(x = hist_col_blue), alpha = .7, binwidth = .003, fill = "cornflowerblue", color = "cornflowerblue") +
+scale_x_continuous(breaks = pretty_breaks(n = 10)) +
+xlab("monthly returns")
+})
+```
+
+### Density
+
+```{r}
+renderPlot({
+
+  portfolio_returns_tq_rebalanced <- portfolio_returns_tq_rebalanced()
+  mean <- mean(portfolio_returns_tq_rebalanced$returns)
+  median <- median(portfolio_returns_tq_rebalanced$returns)
+  skew_density_plot <- portfolio_returns_tq_rebalanced %>% 
+    ggplot(aes(x = returns)) +
+    stat_density(geom = "line", size = 1, color = "cornflowerblue")
+  shaded_area_data <- 
+    ggplot_build(skew_density_plot)$data[[1]] %>% 
+    filter(x < mean)
+  skew_density_plot_shaded <- 
+    skew_density_plot + 
+    geom_area(data = shaded_area_data, aes(x = x, y = y), fill="pink", alpha = 0.5)
+  median_line_data <- ggplot_build(skew_density_plot)$data[[1]] %>% 
+    filter(x <= median)
+  skew_density_plot_shaded +
+    geom_segment(data = median_line_data, aes(x = median, y = 0, xend = median, yend = density), color = "black", linetype = "dotted") +
+    annotate(geom = "text", x = median, y = 5, label = "median", fontface = "plain", angle = 90, alpha = .8, vjust =  1.75) +
+    annotate(geom = "text", x = (mean - .03), y = .1, label = "returns < mean", fontface = "plain", color = "red", alpha = .8, vjust =  -1) +
+  ggtitle("Density Plot Illustrating Skewness")
+ })
+
+```
+
+Returns
+=====================================
+
+
+Row {.tabset .tabset-fade}
+-------------------------------------
+
+
+### Histogram
+
+```{r}
+renderPlot({
+
+  portfolio_returns_tq_rebalanced() %>% 
+    ggplot(aes(x = returns)) +
+    geom_histogram(alpha = 0.25, binwidth = .01, fill = "cornflowerblue")
+})
+```
+
+### Density
+
+```{r}
+renderPlot({
+
+  portfolio_returns_tq_rebalanced() %>% 
+    ggplot(aes(x = returns)) +
+  geom_density(size = 1, color = "red") 
+})
+```
+
+
+### Histogram + Density
+
+```{r}
+renderPlot({
+  
+  portfolio_returns_tq_rebalanced() %>% 
+    ggplot(aes(x = returns)) +
+    geom_histogram(alpha = 0.25, binwidth = .01, fill = "cornflowerblue") +
+    geom_density(geom = "line", size = 1, color = "red") 
+})
+```
+
+Row {.tabset}
+-------------------------------------
+ 
+### growth of the portfolio over time
+
+```{r}
+renderPlot({
+
+  portfolio_returns_tq_rebalanced() %>%
+    mutate(cumulative_returns = cumprod(returns + 1) - 1) %>%
+    ggplot(aes(x = date, y = cumulative_returns)) +
+    geom_line(color = "cornflowerblue") +
+    labs(x = "Date", y = "Cumulative Returns")
+})
+```
+
+### Time Series with Rolling Mean
+
+
+```{r}
+renderPlot({
+
+  portfolio_returns_tq_rebalanced() %>%
+    mutate(rolling_mean = rollmeanr(returns, k = input$window, fill = NA)) %>%
+    ggplot(aes(x = date)) +
+    geom_line(aes(y = returns), color = "cornflowerblue", alpha = 0.5) +
+    geom_line(aes(y = rolling_mean), color = "red", size = 1) +
+    labs(x = "Date", y = "Returns")
+})
+```
+
+### Density Plot by Year
+
+
+```{r}
+renderPlot({
+  
+  portfolio_returns_tq_rebalanced() %>%
+    mutate(year = year(date)) %>%
+    ggplot(aes(x = returns, fill = factor(year))) +
+    geom_density(alpha = 0.5) +
+    scale_fill_discrete(name = "Year") +
+    labs(x = "Returns", y = "Density")
+})
+```
+
+
